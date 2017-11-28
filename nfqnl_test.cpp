@@ -58,9 +58,20 @@ int KMP(char sentence[], char word[], int len) {
 int print_host(char **host_n, u_char *buf, int size) {
 	int i,j=0,k=0;
 	int found = 0;
-	char get[] = "GET ";
+	char get[][10] = {"GET","POST","HEAD","PUT","DELETE","OPTIONS","CONNECT"};
 	char host[] = "Host: ";
-	
+	char host_buf[1000]={0};
+	for(i=0;i<7;i++) {
+		if(KMP((char *)buf,get[i],size)!=-1) break;
+		if(i==7) return 0;
+	}
+	if((found = KMP((char *)buf,host,size))==-1) return 0;
+	sscanf((const char *)buf+found,"%s %s",host,host_buf);
+	*host_n = (char *)malloc(strlen(host_buf)+1);
+	strcpy(*host_n,host_buf);
+	printf("%s\n", *host_n);
+	return strlen(*host_n);
+/*
 	for(i=0;i<size;i++) {
 		if(!found) {
 			if(buf[i] == get[j]) j++;
@@ -84,7 +95,7 @@ int print_host(char **host_n, u_char *buf, int size) {
 		
 		return i-start;
 	}
-	return 0;
+	return 0;*/
 }
 
 int msgcmp(char *buffer, const char *cmp) {
@@ -144,6 +155,7 @@ accepting:
 		char *buffer;
 		buffer = (char *)malloc(sizeof(char)*610);
 		char new_buffer[610];
+		char temp1[50];
 		char httpreq[50] = "HTTP";
 		char *hostname = NULL;
 		char *temp = NULL;
@@ -160,14 +172,16 @@ accepting:
 			printf("/***************iqnqpquqtq*********\n");
 			printf("%s\n",buffer);	
 			printf("***********************************/\n");
-			if(flag%2==0 && msgcmp(buffer,"GET ") ) {
+			if(flag%2==0) {
+				
 				flag |= 1;
 			//GET http://www.dummy.com HTTP/1.1\r\n 35
 			//Host: www.dummy.com\r\n\r\n 23
 				if(!print_host(&hostname,(u_char *)buffer, strlen(buffer))) {
-					for(i=0;buffer[i+11]!=' ' && buffer[i+11]!='\n' && buffer[i+11]!='/';i++);
+					sscanf(buffer,"%s%s",temp1,new_buffer);
+					for(i=0;new_buffer[i+7]!=' ' && new_buffer[i+7]!='\n' && new_buffer[i+7]!='/';i++);
 					hostname = (char *)malloc(i+1);
-					memcpy(hostname, buffer+11, i);
+					memcpy(hostname, new_buffer+7, i);
 					hostname[i] = '\0';
 				}
 				printf("hostname : %s\n",hostname);
@@ -201,8 +215,8 @@ accepting:
 		int totlen = 0x7fffffff;
 		while(1) {
 			if(totlen<=0) break;
-			memset(buffer,0,515);
-			n = recv(clifd, buffer, 510, 0);
+			memset(buffer,0,525);
+			n = recv(clifd, buffer, 520, 0);
 			if(n<=0) break;
 			//if(n!=500) flag|=2;
 			buffer[n] = '\0';
@@ -226,12 +240,12 @@ accepting:
 				if(c_len == -1) break;
 				totlen += c_len + 4;
 				printf("\ttotal len : %d\n",totlen);
-				n = send(newsockfd,buffer,strlen(buffer),0);	
+				n = send(newsockfd,buffer,n,0);	
 				totlen-=n;
 				flag |= 1;
 			}
 			else {
-				n = send(newsockfd,buffer,strlen(buffer),0);
+				n = send(newsockfd,buffer,n,0);
 				totlen-=n;
 			}
 		}
