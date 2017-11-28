@@ -1,5 +1,3 @@
-
-#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <netinet/in.h>
@@ -7,14 +5,55 @@
 #include <linux/netfilter.h>		/* for NF_ACCEPT */
 #include <errno.h>
 #include <string.h>
-
+#include <stdio.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <netdb.h>
 #include <libnetfilter_queue/libnetfilter_queue.h>
+#define BUF_LEN 2048
 
 
 typedef struct trie_node{char c; int child_size; trie_node **child;}trie_node;
 
 char *data[1000000];
 char temp[100];
+
+int fail[700];
+
+int failure(char word[],int n) {
+	int i=0,j=-1;
+	for(i=0;i<n;i++) fail[i] = -1;
+	i=1;
+	fail[0]=-1;
+	while(i<n) {
+		if(word[fail[i]+1]==word[i+1]) {
+			j++;
+			fail[i] = j;
+			i++;
+		} else if(j>-1) j=fail[j];
+		else {
+			i++;
+		}
+	}
+	return 0;	
+}
+
+int KMP(char sentence[], char word[], int len) {
+	failure(word,strlen(word));
+	int i=0,j=-1;
+	int word_len = strlen(word);
+	for(i=0;i<len;i++) {
+		//printf("%d %d\n",i,j);
+		j++;
+		if(sentence[i] == word[j]) {
+			if(j==word_len-1) return i-j;
+		}
+		else j = fail[j];
+	}
+	return -1;
+}
 
 int print_host(char **host_n, u_char *buf, int size) {
 	int i,j=0,k=0;
@@ -48,246 +87,165 @@ int print_host(char **host_n, u_char *buf, int size) {
 	return 0;
 }
 
-void dump(unsigned char* buf, int size) {
-    int i;
-    for (i = 0; i < size; i++) {
-        if (i % 16 == 0)
-            printf("\n");
-        printf("%02x ", buf[i]);
-    }
+int msgcmp(char *buffer, const char *cmp) {
+	int i, len = strlen(cmp);
+	if(strlen(buffer)<len) return 0;
+	for(i=0;i<len;i++) {
+		if(buffer[i]!=cmp[i]) return 0;
+	}
+	return 1;
 }
+int child_count = 0;
+int main() {
+//	char sentence[100];
+//	scanf("%s",sentence);
+//	scanf("%s",temp);
+//	printf("%d\n",KMP(sentence,temp,strlen(sentence)));
+	int i,j;
+//	return 0;
+	pid_t pid;
+	struct sockaddr_in addr_in, cli_addr, serv_addr;
+	struct hostent *host;
+	int sockfd, newsockfd;
 
-/* returns packet id */
-static u_int32_t print_pkt (struct nfq_data *tb)
-{
-	int id = 0;
-	struct nfqnl_msg_packet_hdr *ph;
-	struct nfqnl_msg_packet_hw *hwph;
-	u_int32_t mark,ifi; 
-	int ret;
-	unsigned char *data;
-
-	ph = nfq_get_msg_packet_hdr(tb);
-	if (ph) {
-		id = ntohl(ph->packet_id);
-		printf("hw_protocol=0x%04x hook=%u id=%u ",
-			ntohs(ph->hw_protocol), ph->hook, id);
-	}
-
-	hwph = nfq_get_packet_hw(tb);
-	if (hwph) {
-		int i, hlen = ntohs(hwph->hw_addrlen);
-
-		printf("hw_src_addr=");
-		for (i = 0; i < hlen-1; i++)
-			printf("%02x:", hwph->hw_addr[i]);
-		printf("%02x ", hwph->hw_addr[hlen-1]);
-	}
-
-	mark = nfq_get_nfmark(tb);
-	if (mark)
-		printf("mark=%u ", mark);
-
-	ifi = nfq_get_indev(tb);
-	if (ifi)
-		printf("indev=%u ", ifi);
-
-	ifi = nfq_get_outdev(tb);
-	if (ifi)
-		printf("outdev=%u ", ifi);
-	ifi = nfq_get_physindev(tb);
-	if (ifi)
-		printf("physindev=%u ", ifi);
-
-	ifi = nfq_get_physoutdev(tb);
-	if (ifi)
-		printf("physoutdev=%u ", ifi);
-/*
-	ret = nfq_get_payload(tb, &data);
-	if (ret >= 0) {
-		printf("payload_len=%d ", ret);
-		dump(data,ret>0xff?0xff:ret);
-		char *host_name = NULL;	
-		int host_len = print_host(&host_name,data,ret);	
-	//	printf("addr of host_n : %x\n",host_name);
-		if(host_len) {
-			printf("%s\n",host_name);
-		}
-		if(host_name!=NULL) free(host_name);
-	}
-*/
-	fputc('\n', stdout);
-
-	return id;
-}
+	memset((char *)&serv_addr, 0x00, sizeof(serv_addr));
+	memset((char *)&cli_addr, 0x00, sizeof(serv_addr));
 	
-char *block_host;
-trie_node *root;
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	serv_addr.sin_port = htons(8080);
 
-trie_node *connect_node(int start, int end, int depth) {
-	int st=start,en=end,md;
-	int node_count = 0;
-	int dir_start = st;
-	trie_node *save[300];
-	int save_count=0;
-	trie_node *result = (trie_node *)malloc(sizeof(trie_node));
-	while(dir_start<=end &&(depth<0||data[start][depth]!='\0')) {
-		st = dir_start;
-		en = end;
-		md = (st+en)/2;
-		while(st<en-1) {
-			if(data[dir_start][depth+1]<data[md][depth+1]) en=md;
-			else st=md;
-			md = (st+en)/2;
-		}
-		if(data[st][depth+1] == data[en][depth+1]) md = en;
-		else md = st;
-		save[save_count++] = connect_node(dir_start,md,depth+1);
-		dir_start = md+1;
+	if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+		printf("Server fd error\n");
+		return 0;
 	}
-	if(save_count) result->child = (trie_node **)malloc(sizeof(trie_node *)*save_count);
-	else result->child = NULL;
-	for(int i=0;i<save_count;i++) {
-		result->child[i] = save[i];
+	if(bind(sockfd,(struct sockaddr *)&serv_addr, sizeof(serv_addr))<0) {
+		printf("Binding error\n");
+		return 0;
 	}
-	result->child_size = save_count;
-	if(depth>=0) result->c=data[start][depth];
-	else result->c = '\0';
-	return result;
-}
 
-int trip(char *str,trie_node *root,int depth) {
-	int i;
-	int size = root->child_size;
-	for(i=0;i<size;i++) {
-		if(root->child[i]->c == str[depth]) {
-			if(root->child[i]->c == '\0') return 1;
-			else return trip(str,root->child[i],depth+1);
+	listen(sockfd,50);
+	int clilen = sizeof(cli_addr);
+
+	//accepting
+accepting:
+	
+	newsockfd = accept(sockfd,(struct sockaddr *)&cli_addr, (unsigned int *)&clilen);
+	printf("packet accepted\n");
+	if(newsockfd < 0) {
+		printf("Accepting connection error\n");
+		return 0;
+	}
+	pid = fork();
+	if(pid == 0) {
+		pid = ++child_count;
+		struct sockaddr_in host_addr;
+		int flag = 0, newclifd=-1, n, port=0, i, clifd;
+		char *buffer;
+		buffer = (char *)malloc(sizeof(char)*610);
+		char new_buffer[610];
+		char httpreq[50] = "HTTP";
+		char *hostname = NULL;
+		char *temp = NULL;
+		int count = 0;
+		while(1) {
+			if(flag >= 2) break;
+			memset(buffer, 0, 505);
+			n = recv(newsockfd, buffer, 500, 0);
+			if(n!=500) flag |= 2;
+			count++;
+			printf("received n : %d, count : %d, c_count : %d\n",n,count,pid);
+			if(n<=0) break;
+			buffer[n] = '\0';
+			printf("/***************iqnqpquqtq*********\n");
+			printf("%s\n",buffer);	
+			printf("***********************************/\n");
+			if(flag%2==0 && msgcmp(buffer,"GET ") ) {
+				flag |= 1;
+			//GET http://www.dummy.com HTTP/1.1\r\n 35
+			//Host: www.dummy.com\r\n\r\n 23
+				if(!print_host(&hostname,(u_char *)buffer, strlen(buffer))) {
+					for(i=0;buffer[i+11]!=' ' && buffer[i+11]!='\n' && buffer[i+11]!='/';i++);
+					hostname = (char *)malloc(i+1);
+					memcpy(hostname, buffer+11, i);
+					hostname[i] = '\0';
+				}
+				printf("hostname : %s\n",hostname);
+				host = gethostbyname(hostname);
+				memset(&host_addr, 0, sizeof(host_addr));
+				host_addr.sin_port = htons(80);
+				host_addr.sin_family = AF_INET;
+				memcpy((char *)&host_addr.sin_addr.s_addr, (char *)host->h_addr, host->h_length);
+				printf("IP : %s\n",inet_ntoa(host_addr.sin_addr));
+				clifd = socket(AF_INET, SOCK_STREAM, 0);
+				newclifd = connect(clifd, (struct sockaddr*)&host_addr, sizeof(struct sockaddr));
+				printf("\tconnect success\n");
+				if(newclifd<0) {
+					printf("error with connecting host\n");
+					return 0;
+				}
+				sprintf(new_buffer, "%s%s","GET http://www.dummy.com HTTP/1.1\r\nHost: www.dummy.com\r\n\r\n",buffer);
+				
+				n = send(clifd,buffer,strlen(buffer),0);
+				//n = send(clifd,new_buffer,strlen(new_buffer),0);
+				printf("\tsend success\n");
+			}
+			else if(n>0) {
+				if(newclifd<0) return 0;
+				n = send(clifd, buffer, strlen(buffer),0);
+			}
+		}	
+		if(newclifd<0) return 0;
+		printf("\tsend complete\n");
+		flag = 0;
+		int totlen = 0x7fffffff;
+		while(1) {
+			if(totlen<=0) break;
+			memset(buffer,0,515);
+			n = recv(clifd, buffer, 510, 0);
+			if(n<=0) break;
+			//if(n!=500) flag|=2;
+			buffer[n] = '\0';
+			printf("////////////////////////////////////\n");
+			printf("/*********oquqtqpquqtq**************\n");
+			printf("%s\n",buffer);	
+			printf("***********************************/\n");
+			printf("////////////////////////////////////\n");
+			printf("\treceived n : %d, flag : %d, totlen : %d\n",n,flag,totlen);
+			if(flag == 0 && msgcmp(buffer, httpreq)) {
+				int c_len = -1;
+				c_len = KMP(buffer, "Content-Length: ",strlen(buffer));
+				if(c_len == -1) c_len = KMP(buffer, "content-length: ",strlen(buffer));
+				if(c_len == -1) {
+					printf("couldn't found content-length\n");
+					n = send(newsockfd,buffer,strlen(buffer),0);	
+					break;
+				}
+				sscanf(buffer+c_len+16,"%d",&totlen);
+				c_len = KMP(buffer, "\r\n\r\n",strlen(buffer));
+				if(c_len == -1) break;
+				totlen += c_len + 4;
+				printf("\ttotal len : %d\n",totlen);
+				n = send(newsockfd,buffer,strlen(buffer),0);	
+				totlen-=n;
+				flag |= 1;
+			}
+			else {
+				n = send(newsockfd,buffer,strlen(buffer),0);
+				totlen-=n;
+			}
 		}
+		close(newsockfd);
+		close(clifd);
+		close(newclifd);
+		printf("\tchild %d close\n",pid);
+		return 0;
+	}
+	else {
+		close(newsockfd);
+		child_count++;
+		goto accepting;
 	}
 	return 0;
 }
 
-trie_node *make_trie() {
-	FILE *fpr = fopen("sorted_data.data","r");
-	int i;
-	for(i=0;i<1000000;i++) {
-		fscanf(fpr,"%s",temp);
-		int len = strlen(temp);
-		data[i] = (char *)malloc(len+1);
-		strcpy(data[i],temp);
-	}
-	trie_node *root = NULL;
-	
-	root = connect_node(0,999999,-1);
-	for(i=0;i<1000000;i++) free(data[i]);
-	fclose(fpr);
-	return root;
-}
-
-static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
-	      struct nfq_data *nfa, void *data)
-{
-	u_int32_t id = print_pkt(nfa);
-	int ret = nfq_get_payload(nfa, (unsigned char **)&data);
-	if (ret >= 0) {
-		printf("payload_len=%d ", ret);
-//		dump((u_char *)data,ret>0xff?0xff:ret);
-		char *host_name = NULL;	
-		int host_len = print_host(&host_name,(u_char *)data,ret);	
-	//	printf("addr of host_n : %x\n",host_name);
-		if(host_len) {
-			printf("h_n : %s\n",host_name);
-			if(trip(host_name,root,0)) {
-				sleep(3);
-				printf("blocked host\n");
-				return nfq_set_verdict(qh,id,NF_DROP,0,NULL);
-			}
-		}
-		if(host_name!=NULL) free(host_name);
-	}
-
-
-	printf("entering callback\n");
-	return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
-}
-	
-int main(int argc, char **argv)
-{
-	struct nfq_handle *h;
-	struct nfq_q_handle *qh;
-	struct nfnl_handle *nh;
-	int fd;
-	int rv;
-	char buf[4096] __attribute__ ((aligned));
-	root = make_trie();
-	printf("opening library handle\n");
-	h = nfq_open();
-	if (!h) {
-		fprintf(stderr, "error during nfq_open()\n");
-		exit(1);
-	}
-
-	printf("unbinding existing nf_queue handler for AF_INET (if any)\n");
-	if (nfq_unbind_pf(h, AF_INET) < 0) {
-		fprintf(stderr, "error during nfq_unbind_pf()\n");
-		exit(1);
-	}
-
-	printf("binding nfnetlink_queue as nf_queue handler for AF_INET\n");
-	if (nfq_bind_pf(h, AF_INET) < 0) {
-		fprintf(stderr, "error during nfq_bind_pf()\n");
-		exit(1);
-	}
-
-	printf("binding this socket to queue '0'\n");
-	qh = nfq_create_queue(h,  0, &cb, NULL);
-	if (!qh) {
-		fprintf(stderr, "error during nfq_create_queue()\n");
-		exit(1);
-	}
-
-	printf("setting copy_packet mode\n");
-	if (nfq_set_mode(qh, NFQNL_COPY_PACKET, 0xffff) < 0) {
-		fprintf(stderr, "can't set packet_copy mode\n");
-		exit(1);
-	}
-
-	fd = nfq_fd(h);
-
-	for (;;) {
-		if ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
-			printf("pkt received\n");
-			nfq_handle_packet(h, buf, rv);
-			continue;
-		}
-		/* if your application is too slow to digest the packets that
-		 * are sent from kernel-space, the socket buffer that we use
-		 * to enqueue packets may fill up returning ENOBUFS. Depending
-		 * on your application, this error may be ignored. Please, see
-		 * the doxygen documentation of this library on how to improve
-		 * this situation.
-		 */
-		if (rv < 0 && errno == ENOBUFS) {
-			printf("losing packets!\n");
-			continue;
-		}
-		perror("recv failed");
-		break;
-	}
-
-	printf("unbinding from queue 0\n");
-	nfq_destroy_queue(qh);
-
-#ifdef INSANE
-	/* normally, applications SHOULD NOT issue this command, since
-	 * it detaches other programs/sockets from AF_INET, too ! */
-	printf("unbinding from AF_INET\n");
-	nfq_unbind_pf(h, AF_INET);
-#endif
-
-	printf("closing library handle\n");
-	nfq_close(h);
-
-	exit(0);
-}
