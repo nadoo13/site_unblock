@@ -153,8 +153,8 @@ accepting:
 		struct sockaddr_in host_addr;
 		int flag = 0, newclifd=-1, n, port=0, i, clifd;
 		char *buffer;
-		buffer = (char *)malloc(sizeof(char)*610);
-		char new_buffer[610];
+		buffer = (char *)malloc(sizeof(char)*1110);
+		char new_buffer[1110];
 		char temp1[50];
 		char httpreq[50] = "HTTP";
 		char *hostname = NULL;
@@ -198,10 +198,10 @@ accepting:
 					printf("error with connecting host\n");
 					return 0;
 				}
-				sprintf(new_buffer, "%s%s","GET http://www.dummy.com HTTP/1.1\r\nHost: www.dummy.com\r\n\r\n",buffer);
-				
-				n = send(clifd,buffer,strlen(buffer),0);
-				//n = send(clifd,new_buffer,strlen(new_buffer),0);
+				sprintf(new_buffer, "%s%s","GET http://test.gilgil.net/ HTTP/1.1\r\nHost: test.gilgil.net\r\n\r\n",buffer);
+				printf("new_buffer : \n%s\n",new_buffer);
+				//n = send(clifd,buffer,strlen(buffer),0);
+				n = send(clifd,new_buffer,strlen(new_buffer),0);
 				printf("\tsend success\n");
 			}
 			else if(n>0) {
@@ -213,10 +213,14 @@ accepting:
 		printf("\tsend complete\n");
 		flag = 0;
 		int totlen = 0x7fffffff;
+		int dellen = 0;
+		char *save = buffer;
 		while(1) {
+			buffer = save;
 			if(totlen<=0) break;
-			memset(buffer,0,525);
-			n = recv(clifd, buffer, 520, 0);
+			memset(buffer,0,1010);
+			n = recv(clifd, buffer, 1000, 0);
+			printf("\tn : %d\n",n);
 			if(n<=0) break;
 			//if(n!=500) flag|=2;
 			buffer[n] = '\0';
@@ -226,7 +230,43 @@ accepting:
 			printf("***********************************/\n");
 			printf("////////////////////////////////////\n");
 			printf("\treceived n : %d, flag : %d, totlen : %d\n",n,flag,totlen);
+
 			if(flag == 0 && msgcmp(buffer, httpreq)) {
+				//delete dummy packet
+				int d_len = -1;
+				d_len = KMP(buffer, "Content-Length: ",strlen(buffer));
+				if(d_len == -1) d_len = KMP(buffer, "content-length: ",strlen(buffer));
+				if(d_len == -1) {
+					printf("couldn't found content-length\n");
+					n = send(newsockfd,buffer,strlen(buffer),0);
+					break;
+				}
+				sscanf(buffer+d_len+16,"%d",&dellen);
+				
+				d_len = KMP(buffer, "\r\n\r\n",strlen(buffer));
+				if(d_len == -1) break;
+				dellen += d_len + 4;
+				if(dellen >=n) 	dellen-=n;
+				else {
+					buffer += dellen;
+					flag = 1;
+					n-=dellen;
+				}
+				if(dellen == 0) {
+					flag = 1;
+					n=0;
+				}
+			}
+			else if(flag == 0) {
+				if(dellen >=n) 	dellen-=n;
+				else {
+					buffer += dellen;
+					flag = 1;
+				}
+				if(dellen == 0) flag = 1;
+			}
+			printf("moved buffer : \n%s\n",buffer);
+			if(flag == 1 && msgcmp(buffer, httpreq)) {
 				int c_len = -1;
 				c_len = KMP(buffer, "Content-Length: ",strlen(buffer));
 				if(c_len == -1) c_len = KMP(buffer, "content-length: ",strlen(buffer));
@@ -242,9 +282,8 @@ accepting:
 				printf("\ttotal len : %d\n",totlen);
 				n = send(newsockfd,buffer,n,0);	
 				totlen-=n;
-				flag |= 1;
 			}
-			else {
+			else if(flag == 1){
 				n = send(newsockfd,buffer,n,0);
 				totlen-=n;
 			}
